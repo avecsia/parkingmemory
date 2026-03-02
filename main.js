@@ -2,10 +2,16 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-// Firebase 설정 (환경 변수가 없을 경우 대비해 기본 구조 유지)
-const firebaseConfig = typeof window.__firebase_config__ === 'string' 
-    ? JSON.parse(window.__firebase_config__) 
-    : (window.__firebase_config__ || {});
+// Firebase 설정
+let firebaseConfig = {};
+try {
+    firebaseConfig = typeof window.__firebase_config__ === 'string' 
+        ? JSON.parse(window.__firebase_config__) 
+        : (window.__firebase_config__ || {});
+} catch (e) {
+    console.error("Firebase config parse error:", e);
+}
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -32,17 +38,37 @@ const parkingLayout = [
     { id: '304', type: 'tall', label: '304' },
 ];
 
+// 에러 표시 함수
+function showError(msg) {
+    const loader = document.getElementById('loading-screen');
+    if (loader) {
+        loader.innerHTML = `<div class="p-6 text-center">
+            <div class="text-red-500 mb-4"><i data-lucide="alert-circle" class="w-12 h-12 mx-auto"></i></div>
+            <p class="text-red-600 font-bold mb-2">연결 오류 발생</p>
+            <p class="text-xs text-slate-500 break-all">${msg}</p>
+            <button onclick="location.reload()" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">다시 시도</button>
+        </div>`;
+        lucide.createIcons();
+    }
+}
+
 // 초기화 함수
 async function init() {
     lucide.createIcons();
+    console.log("App initializing...");
     
-    // 익명 로그인
+    // 익명 로그인 상태 감시
     onAuthStateChanged(auth, (user) => {
         if (user) {
+            console.log("Authenticated as:", user.uid);
             currentUser = user;
             startDataSync();
         } else {
-            signInAnonymously(auth);
+            console.log("No user, signing in anonymously...");
+            signInAnonymously(auth).catch(err => {
+                console.error("Auth Error:", err);
+                showError("인증에 실패했습니다. Firebase 콘솔에서 '익명 로그인'이 활성화되어 있는지 확인해 주세요. (" + err.code + ")");
+            });
         }
     });
 
@@ -52,9 +78,21 @@ async function init() {
 // 데이터 동기화
 function startDataSync() {
     if (!currentUser) return;
+    console.log("Starting data sync for:", currentUser.uid);
+    
     const parkingCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'parking');
     
+    // 타임아웃 설정 (10초 후에도 로딩 중이면 에러 표시)
+    const timeout = setTimeout(() => {
+        if (document.getElementById('loading-screen') && !document.getElementById('loading-screen').classList.contains('hidden')) {
+            showError("데이터베이스 응답이 너무 늦습니다. 인터넷 연결이나 Firestore 보안 규칙을 확인해 주세요.");
+        }
+    }, 10000);
+
     onSnapshot(parkingCol, (snapshot) => {
+        clearTimeout(timeout);
+        console.log("Data snapshot received. Count:", snapshot.size);
+        
         parkingData = { 'B1': {}, 'B2': {}, 'B3': {} };
         snapshot.forEach((doc) => {
             const data = doc.data();
@@ -65,6 +103,10 @@ function startDataSync() {
         renderApp();
         document.getElementById('loading-screen').classList.add('hidden');
         document.getElementById('status-text').innerText = "실시간 보호 중";
+    }, (err) => {
+        clearTimeout(timeout);
+        console.error("Firestore Error:", err);
+        showError("데이터베이스 접근 권한이 없습니다. Firestore 보안 규칙을 확인해 주세요. (" + err.code + ")");
     });
 }
 
@@ -76,19 +118,24 @@ function startGpsTracking() {
         const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, TARGET_COORDS.lat, TARGET_COORDS.lng);
         
         // UI 업데이트
-        document.getElementById('distance-text').innerText = `${Math.round(dist)}m 남음`;
-        const badge = document.getElementById('distance-badge');
+        const distText = document.getElementById('distance-text');
+        if (distText) distText.innerText = `${Math.round(dist)}m 남음`;
         
-        if (dist <= PROXIMITY_RADIUS) {
-            badge.innerText = "도착 근접";
-            badge.classList.replace('text-gray-400', 'text-green-600');
-            badge.classList.replace('bg-gray-50', 'bg-green-50');
-            badge.classList.replace('border-gray-200', 'border-green-200');
-            document.getElementById('proximity-alert').classList.remove('hidden');
-        } else {
-            badge.innerText = "위치 추적 중";
-            badge.className = "px-2 py-1 rounded-full text-[10px] font-bold border bg-gray-50 text-gray-400 border-gray-200";
+        const badge = document.getElementById('distance-badge');
+        if (badge) {
+            if (dist <= PROXIMITY_RADIUS) {
+                badge.innerText = "도착 근접";
+                badge.classList.replace('text-gray-400', 'text-green-600');
+                badge.classList.replace('bg-gray-50', 'bg-green-50');
+                badge.classList.replace('border-gray-200', 'border-green-200');
+                document.getElementById('proximity-alert').classList.remove('hidden');
+            } else {
+                badge.innerText = "위치 추적 중";
+                badge.className = "px-2 py-1 rounded-full text-[10px] font-bold border bg-gray-50 text-gray-400 border-gray-200";
+            }
         }
+    }, (err) => {
+        console.warn("GPS Error:", err);
     });
 }
 
@@ -106,9 +153,9 @@ function renderApp() {
     const list = document.getElementById('record-list');
     const floorLabel = document.getElementById('floor-indicator');
     
-    floorLabel.innerText = `${activeFloor} Floor Map`;
-    grid.innerHTML = '';
-    list.innerHTML = '';
+    if (floorLabel) floorLabel.innerText = `${activeFloor} Floor Map`;
+    if (grid) grid.innerHTML = '';
+    if (list) list.innerHTML = '';
 
     // 그리드 그리기
     parkingLayout.forEach(spot => {
@@ -129,29 +176,31 @@ function renderApp() {
             : spot.label;
         
         btn.onclick = () => toggleParking(spot.id);
-        grid.appendChild(btn);
+        if (grid) grid.appendChild(btn);
     });
 
     // 기록 리스트 그리기
     const currentRecords = Object.entries(parkingData[activeFloor]);
-    if (currentRecords.length > 0) {
-        currentRecords.forEach(([id, info]) => {
-            const item = document.createElement('div');
-            item.className = "bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between";
-            item.innerHTML = `
-                <div class="flex items-center gap-3">
-                    <div class="bg-blue-50 p-3 rounded-xl"><i data-lucide="clock" class="w-5 h-5 text-blue-600"></i></div>
-                    <div>
-                        <p class="font-bold text-sm">${activeFloor} 층 - ${id} 구역</p>
-                        <p class="text-[11px] text-gray-400">${info.time} 주차</p>
+    if (list) {
+        if (currentRecords.length > 0) {
+            currentRecords.forEach(([id, info]) => {
+                const item = document.createElement('div');
+                item.className = "bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between";
+                item.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <div class="bg-blue-50 p-3 rounded-xl"><i data-lucide="clock" class="w-5 h-5 text-blue-600"></i></div>
+                        <div>
+                            <p class="font-bold text-sm">${activeFloor} 층 - ${id} 구역</p>
+                            <p class="text-[11px] text-gray-400">${info.time} 주차</p>
+                        </div>
                     </div>
-                </div>
-                <button onclick="window.removeParking('${id}')" class="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
-            `;
-            list.appendChild(item);
-        });
-    } else {
-        list.innerHTML = `<div class="text-center py-8 text-gray-300 text-xs italic">기록된 차량이 없습니다.</div>`;
+                    <button onclick="window.removeParking('${id}')" class="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                `;
+                list.appendChild(item);
+            });
+        } else {
+            list.innerHTML = `<div class="text-center py-8 text-gray-300 text-xs italic">기록된 차량이 없습니다.</div>`;
+        }
     }
     
     lucide.createIcons();
@@ -164,17 +213,22 @@ async function toggleParking(spotId) {
     const docId = `${activeFloor}_${spotId}`;
     const docRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'parking', docId);
 
-    if (isParked) {
-        await deleteDoc(docRef);
-    } else {
-        const now = new Date();
-        const timeStr = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
-        await setDoc(docRef, {
-            floor: activeFloor,
-            spotId: spotId,
-            time: timeStr,
-            timestamp: now.getTime()
-        });
+    try {
+        if (isParked) {
+            await deleteDoc(docRef);
+        } else {
+            const now = new Date();
+            const timeStr = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
+            await setDoc(docRef, {
+                floor: activeFloor,
+                spotId: spotId,
+                time: timeStr,
+                timestamp: now.getTime()
+            });
+        }
+    } catch (err) {
+        console.error("Save Error:", err);
+        alert("데이터 저장에 실패했습니다: " + err.message);
     }
 }
 
@@ -184,11 +238,15 @@ window.switchFloor = (floor) => {
     document.querySelectorAll('.floor-tab').forEach(t => {
         t.className = "floor-tab flex-1 py-3 rounded-xl font-bold transition-all bg-gray-100 text-gray-400";
     });
-    document.getElementById(`tab-${floor}`).className = "floor-tab flex-1 py-3 rounded-xl font-bold transition-all bg-blue-600 text-white shadow-lg shadow-blue-200";
+    const activeTab = document.getElementById(`tab-${floor}`);
+    if (activeTab) activeTab.className = "floor-tab flex-1 py-3 rounded-xl font-bold transition-all bg-blue-600 text-white shadow-lg shadow-blue-200";
     renderApp();
 };
 
 window.removeParking = (id) => toggleParking(id);
-window.closeAlert = () => document.getElementById('proximity-alert').classList.add('hidden');
+window.closeAlert = () => {
+    const alert = document.getElementById('proximity-alert');
+    if (alert) alert.classList.add('hidden');
+};
 
 init();
