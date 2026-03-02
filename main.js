@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 // Firebase 설정
@@ -15,7 +15,9 @@ try {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof window.__app_id__ !== 'undefined' ? window.__app_id__ : 'parking-app-html-v1';
+const provider = new GoogleAuthProvider();
+const appId = 'parking-app-v2'; // 전용 앱 ID로 변경
+const ALLOWED_EMAIL = 'avecsia@gmail.com';
 
 const TARGET_COORDS = { lat: 37.5078621, lng: 126.8960119 }; // 하나아파텔
 const PROXIMITY_RADIUS = 200;
@@ -41,12 +43,14 @@ const parkingLayout = [
 // 에러 표시 함수
 function showError(msg) {
     const loader = document.getElementById('loading-screen');
+    const loadingText = document.getElementById('loading-text');
     if (loader) {
+        loader.classList.remove('hidden');
         loader.innerHTML = `<div class="p-6 text-center">
             <div class="text-red-500 mb-4"><i data-lucide="alert-circle" class="w-12 h-12 mx-auto"></i></div>
-            <p class="text-red-600 font-bold mb-2">연결 오류 발생</p>
-            <p class="text-xs text-slate-500 break-all">${msg}</p>
-            <button onclick="location.reload()" class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">다시 시도</button>
+            <p class="text-red-600 font-bold mb-2">접근 제한</p>
+            <p class="text-xs text-slate-500 break-words mb-4">${msg}</p>
+            <button onclick="location.reload()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">다시 시도</button>
         </div>`;
         lucide.createIcons();
     }
@@ -55,20 +59,42 @@ function showError(msg) {
 // 초기화 함수
 async function init() {
     lucide.createIcons();
-    console.log("App initializing...");
     
-    // 익명 로그인 상태 감시
+    // 버튼 이벤트 리스너
+    document.getElementById('login-button').onclick = () => {
+        signInWithPopup(auth, provider).catch(err => {
+            console.error("Login Error:", err);
+            alert("로그인에 실패했습니다: " + err.message);
+        });
+    };
+
+    document.getElementById('logout-button').onclick = () => {
+        if(confirm("로그아웃 하시겠습니까?")) {
+            signOut(auth);
+        }
+    };
+    
+    // 인증 상태 감시
     onAuthStateChanged(auth, (user) => {
+        const loginOverlay = document.getElementById('login-overlay');
+        const loadingScreen = document.getElementById('loading-screen');
+
         if (user) {
-            console.log("Authenticated as:", user.uid);
-            currentUser = user;
-            startDataSync();
+            if (user.email === ALLOWED_EMAIL) {
+                console.log("Welcome,", user.email);
+                currentUser = user;
+                loginOverlay.classList.add('hidden');
+                startDataSync();
+            } else {
+                console.warn("Unauthorized access attempt:", user.email);
+                signOut(auth);
+                showError("허용되지 않은 계정입니다 (" + user.email + "). 지정된 관리자 계정으로 로그인해 주세요.");
+            }
         } else {
-            console.log("No user, signing in anonymously...");
-            signInAnonymously(auth).catch(err => {
-                console.error("Auth Error:", err);
-                showError("인증에 실패했습니다. Firebase 콘솔에서 '익명 로그인'이 활성화되어 있는지 확인해 주세요. (" + err.code + ")");
-            });
+            console.log("No user logged in.");
+            currentUser = null;
+            loginOverlay.classList.remove('hidden');
+            loadingScreen.classList.add('hidden');
         }
     });
 
@@ -78,21 +104,19 @@ async function init() {
 // 데이터 동기화
 function startDataSync() {
     if (!currentUser) return;
-    console.log("Starting data sync for:", currentUser.uid);
     
-    const parkingCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'parking');
+    // 데이터는 사용자의 UID가 아닌 고정된 경로(또는 이메일 기반 경로)에 저장하여 보안 규칙과 일치시킵니다.
+    // 여기서는 appId 기반의 공용 경로를 사용하되 보안 규칙에서 avecsia@gmail.com만 접근 가능하도록 설정합니다.
+    const parkingCol = collection(db, 'artifacts', appId, 'users', 'admin', 'parking');
     
-    // 타임아웃 설정 (10초 후에도 로딩 중이면 에러 표시)
     const timeout = setTimeout(() => {
         if (document.getElementById('loading-screen') && !document.getElementById('loading-screen').classList.contains('hidden')) {
-            showError("데이터베이스 응답이 너무 늦습니다. 인터넷 연결이나 Firestore 보안 규칙을 확인해 주세요.");
+            showError("데이터베이스 응답이 없습니다. Firestore 보안 규칙이나 네트워크를 확인해 주세요.");
         }
-    }, 10000);
+    }, 8000);
 
     onSnapshot(parkingCol, (snapshot) => {
         clearTimeout(timeout);
-        console.log("Data snapshot received. Count:", snapshot.size);
-        
         parkingData = { 'B1': {}, 'B2': {}, 'B3': {} };
         snapshot.forEach((doc) => {
             const data = doc.data();
@@ -102,11 +126,11 @@ function startDataSync() {
         });
         renderApp();
         document.getElementById('loading-screen').classList.add('hidden');
-        document.getElementById('status-text').innerText = "실시간 보호 중";
+        document.getElementById('status-text').innerText = "관리자 모드 활성";
     }, (err) => {
         clearTimeout(timeout);
         console.error("Firestore Error:", err);
-        showError("데이터베이스 접근 권한이 없습니다. Firestore 보안 규칙을 확인해 주세요. (" + err.code + ")");
+        showError("데이터 읽기 권한이 없습니다. Firestore 보안 규칙에 avecsia@gmail.com이 허용되어 있는지 확인해 주세요.");
     });
 }
 
@@ -116,8 +140,6 @@ function startGpsTracking() {
 
     navigator.geolocation.watchPosition((pos) => {
         const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, TARGET_COORDS.lat, TARGET_COORDS.lng);
-        
-        // UI 업데이트
         const distText = document.getElementById('distance-text');
         if (distText) distText.innerText = `${Math.round(dist)}m 남음`;
         
@@ -125,17 +147,13 @@ function startGpsTracking() {
         if (badge) {
             if (dist <= PROXIMITY_RADIUS) {
                 badge.innerText = "도착 근접";
-                badge.classList.replace('text-gray-400', 'text-green-600');
-                badge.classList.replace('bg-gray-50', 'bg-green-50');
-                badge.classList.replace('border-gray-200', 'border-green-200');
+                badge.className = "px-2 py-1 rounded-full text-[10px] font-bold border bg-green-50 text-green-600 border-green-200";
                 document.getElementById('proximity-alert').classList.remove('hidden');
             } else {
                 badge.innerText = "위치 추적 중";
                 badge.className = "px-2 py-1 rounded-full text-[10px] font-bold border bg-gray-50 text-gray-400 border-gray-200";
             }
         }
-    }, (err) => {
-        console.warn("GPS Error:", err);
     });
 }
 
@@ -157,7 +175,6 @@ function renderApp() {
     if (grid) grid.innerHTML = '';
     if (list) list.innerHTML = '';
 
-    // 그리드 그리기
     parkingLayout.forEach(spot => {
         const isParked = parkingData[activeFloor][spot.id];
         const btn = document.createElement('button');
@@ -167,10 +184,9 @@ function renderApp() {
         if (spot.type === 'tall') spanClass = "row-span-2";
 
         btn.className = `parking-spot relative rounded-lg border-2 flex items-center justify-center text-[10px] font-bold ${spanClass} ${
-            isParked ? 'bg-blue-500 border-blue-600 text-white' : 'bg-gray-50 border-gray-200 text-gray-300'
+            isParked ? 'bg-blue-500 border-blue-600 text-white shadow-md' : 'bg-gray-50 border-gray-200 text-gray-300'
         }`;
         btn.style.minHeight = spot.type === 'tall' ? '120px' : '60px';
-        
         btn.innerHTML = isParked 
             ? `<div class="flex flex-col items-center"><i data-lucide="check-circle-2" class="w-5 h-5 mb-1"></i>My Car</div>`
             : spot.label;
@@ -179,7 +195,6 @@ function renderApp() {
         if (grid) grid.appendChild(btn);
     });
 
-    // 기록 리스트 그리기
     const currentRecords = Object.entries(parkingData[activeFloor]);
     if (list) {
         if (currentRecords.length > 0) {
@@ -194,7 +209,7 @@ function renderApp() {
                             <p class="text-[11px] text-gray-400">${info.time} 주차</p>
                         </div>
                     </div>
-                    <button onclick="window.removeParking('${id}')" class="text-gray-300 hover:text-red-500"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                    <button onclick="window.removeParking('${id}')" class="text-gray-300 hover:text-red-500 transition-colors"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
                 `;
                 list.appendChild(item);
             });
@@ -202,16 +217,15 @@ function renderApp() {
             list.innerHTML = `<div class="text-center py-8 text-gray-300 text-xs italic">기록된 차량이 없습니다.</div>`;
         }
     }
-    
     lucide.createIcons();
 }
 
 // 주차 토글 로직
 async function toggleParking(spotId) {
-    if (!currentUser) return;
+    if (!currentUser || currentUser.email !== ALLOWED_EMAIL) return;
     const isParked = parkingData[activeFloor][spotId];
     const docId = `${activeFloor}_${spotId}`;
-    const docRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'parking', docId);
+    const docRef = doc(db, 'artifacts', appId, 'users', 'admin', 'parking', docId);
 
     try {
         if (isParked) {
@@ -227,8 +241,7 @@ async function toggleParking(spotId) {
             });
         }
     } catch (err) {
-        console.error("Save Error:", err);
-        alert("데이터 저장에 실패했습니다: " + err.message);
+        alert("데이터 저장 권한이 없습니다: " + err.message);
     }
 }
 
