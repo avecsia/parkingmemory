@@ -3,7 +3,7 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gsta
 import { getFirestore, doc, setDoc, onSnapshot, collection, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 // Firebase 설정 (환경 변수가 없을 경우 대비해 기본 구조 유지)
-const firebaseConfig = JSON.parse(window.__firebase_config__);
+const firebaseConfig = JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG || window.__firebase_config__);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);

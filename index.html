@@ -95,17 +95,9 @@
         <button onclick="closeAlert()" class="w-full py-2 bg-white text-blue-600 rounded-xl font-bold text-xs shadow-sm">네, 기록할게요</button>
     </div>
 
-    <!-- Firebase SDK (using window.__firebase_config__ for flexibility) -->
     <script>
-        // Default config for local testing if not injected
-        window.__firebase_config__ = window.__firebase_config__ || JSON.stringify({
-            apiKey: "dummy-key",
-            authDomain: "dummy-domain.firebaseapp.com",
-            projectId: "dummy-id",
-            storageBucket: "dummy-bucket.appspot.com",
-            messagingSenderId: "dummy-sender",
-            appId: "dummy-app-id"
-        });
+      // This script block is intentionally left blank.
+      // Firebase configuration is now handled via environment variables.
     </script>
     <script type="module" src="main.js"></script>
 </body>
