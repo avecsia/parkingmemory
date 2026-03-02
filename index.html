@@ -97,14 +97,14 @@
 
     <!-- Firebase SDK (using window.__firebase_config__ for flexibility) -->
     <script>
-        // Default config for local testing if not injected
-        window.__firebase_config__ = window.__firebase_config__ || JSON.stringify({
-            apiKey: "dummy-key",
-            authDomain: "dummy-domain.firebaseapp.com",
-            projectId: "dummy-id",
-            storageBucket: "dummy-bucket.appspot.com",
-            messagingSenderId: "dummy-sender",
-            appId: "dummy-app-id"
+        // Updated with actual Firebase project configuration
+        window.__firebase_config__ = JSON.stringify({
+          apiKey: "AIzaSyDuoWcGS-vYERyI45iW66GWsvQ27NEeLC0",
+          authDomain: "where-is-my-car-96937162-db760.firebaseapp.com",
+          projectId: "where-is-my-car-96937162-db760",
+          storageBucket: "where-is-my-car-96937162-db760.firebasestorage.app",
+          messagingSenderId: "577812265050",
+          appId: "1:577812265050:web:15314359819d32d973c063"
         });
     </script>
     <script type="module" src="main.js"></script>
